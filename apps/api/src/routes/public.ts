@@ -9,6 +9,7 @@ import { getCatalog } from "../services/query-service.js";
 import { MAX_EXPORT_SIZE, MAX_PAYMENT_ATTEMPTS, MAX_USAGE_EVENTS } from "../lib/storage/constants.js";
 import { isStorageAvailable } from "../lib/storage/index.js";
 import { checkFacilitatorSupported } from "../lib/facilitator-check.js";
+import { isSchemaCurrent } from "../lib/storage/sqlite/store.js";
 
 export const publicRouter = Router();
 
@@ -51,14 +52,23 @@ publicRouter.get("/health", (_req, res) => {
 
 publicRouter.get("/api/readiness", async (_req, res) => {
   const facilitatorSupported = await checkFacilitatorSupported();
+  let schemaReady = config.analyticsStorage !== "sqlite";
+  if (config.analyticsStorage === "sqlite") {
+    try {
+      schemaReady = isSchemaCurrent(config.analyticsDbPath);
+    } catch {
+      schemaReady = false;
+    }
+  }
 
   const providersByMode = {
     live: providers.filter((p) => p.sourceType === "live").length,
     fallback: providers.filter((p) => p.sourceType !== "live").length
   };
 
-  res.json({
-    ok: true,
+  res.status(schemaReady ? 200 : 503).json({
+    ok: schemaReady,
+    schemaReady,
     version: buildMetadata.version,
     gitCommit: buildMetadata.gitCommit,
     buildTime: buildMetadata.buildTime,

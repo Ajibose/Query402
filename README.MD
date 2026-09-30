@@ -460,3 +460,4 @@ npm run demo --workspace @query402/agent-client
 ```
 
 **Note:** Never commit real private keys or funded wallet secrets to `.env` files. Use testnet keys only for local development.
+..

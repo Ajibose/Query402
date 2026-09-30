@@ -9,7 +9,18 @@ import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import type { NextFunction, Request, Response } from "express";
 import type { HTTPRequestContext } from "@x402/core/server";
 import type { PaymentPayload } from "@x402/core/types";
-import { getProviderById, protectedRouteBasePrices } from "./pricing.js";
+import {
+  assertPriceMatch,
+  buildChallengeAmountUnits,
+  getProviderById,
+  getProviderPriceUnits,
+  protectedRouteBasePrices,
+  unitsToUsdString,
+  usdStringToUnits,
+  PriceMismatchError,
+  UnsafePriceError,
+  ZeroPriceError
+} from "./pricing.js";
 import { config, requirePayToAddress } from "./config.js";
 import { buildPaymentDebugMetadata } from "./payment-debug.js";
 import { redactSensitiveObject } from "./redact-headers.js";
@@ -64,20 +75,6 @@ function getProviderIdFromRequest(req: Request): string {
   return typeof providerId === "string" ? providerId : "unknown";
 }
 
-function getExpectedPriceForRequest(req: Request): string {
-  const mode = routeModeFromPath(req.path);
-  if (!mode) {
-    return "$0.01";
-  }
-  const basePrice = basePriceByMode[mode as RouteMode];
-  const pId = getProviderIdFromRequest(req);
-  const p = getProviderById(pId);
-  if (p && p.category === mode) {
-    return formatUsdPrice(p.priceUsd);
-  }
-  return basePrice;
-}
-
 function getProviderFromContext(context: HTTPRequestContext) {
   const rawProvider =
     context.adapter.getQueryParam?.("provider") ?? context.adapter.getQueryParams?.()["provider"];
@@ -101,6 +98,45 @@ export function resolveRoutePrice(context: HTTPRequestContext, mode: RouteMode) 
   }
 
   return formatUsdPrice(provider.priceUsd);
+}
+
+export function resolveRoutePriceUnits(context: HTTPRequestContext, mode: RouteMode): number {
+  const providerId = getProviderFromContext(context);
+  if (!providerId) {
+    return usdStringToUnits(basePriceByMode[mode]);
+  }
+
+  const provider = getProviderById(providerId);
+  if (!provider || provider.category !== mode) {
+    return usdStringToUnits(basePriceByMode[mode]);
+  }
+
+  return getProviderPriceUnits(providerId);
+}
+
+export function buildRouteChallengePrice(context: HTTPRequestContext, mode: RouteMode): string {
+  const providerId = getProviderFromContext(context);
+  if (!providerId) {
+    const baseUnits = usdStringToUnits(basePriceByMode[mode]);
+    if (baseUnits === 0) {
+      throw new ZeroPriceError(mode);
+    }
+    return unitsToUsdString(baseUnits);
+  }
+
+  const provider = getProviderById(providerId);
+  if (!provider || provider.category !== mode) {
+    const baseUnits = usdStringToUnits(basePriceByMode[mode]);
+    if (baseUnits === 0) {
+      throw new ZeroPriceError(mode);
+    }
+    return unitsToUsdString(baseUnits);
+  }
+
+  const catalogUnits = getProviderPriceUnits(providerId);
+  const challengeUnits = buildChallengeAmountUnits(providerId);
+  assertPriceMatch(challengeUnits, catalogUnits);
+  return unitsToUsdString(challengeUnits);
 }
 
 function clonePaymentPayload(paymentPayload: unknown): PaymentPayload | undefined {
@@ -135,7 +171,7 @@ function demoMode402Middleware(req: Request, res: Response, next: NextFunction) 
       setPaymentEvidence(req, buildDemoPaymentEvidence(req));
     } catch (error) {
       return next(error);
-    }
+  }
     return next();
   }
 
@@ -332,7 +368,7 @@ export function createX402Middleware() {
       accepts: {
         scheme: "exact",
         network,
-        price: (context: HTTPRequestContext) => resolveRoutePrice(context, "search"),
+        price: (context: HTTPRequestContext) => buildRouteChallengePrice(context, "search"),
         payTo
       },
       description: "Paid search endpoint on Query402",
@@ -342,7 +378,7 @@ export function createX402Middleware() {
       accepts: {
         scheme: "exact",
         network,
-        price: (context: HTTPRequestContext) => resolveRoutePrice(context, "news"),
+        price: (context: HTTPRequestContext) => buildRouteChallengePrice(context, "news"),
         payTo
       },
       description: "Paid news endpoint on Query402",
@@ -352,7 +388,7 @@ export function createX402Middleware() {
       accepts: {
         scheme: "exact",
         network,
-        price: (context: HTTPRequestContext) => resolveRoutePrice(context, "scrape"),
+        price: (context: HTTPRequestContext) => buildRouteChallengePrice(context, "scrape"),
         payTo
       },
       description: "Paid scrape endpoint on Query402",
@@ -371,98 +407,13 @@ export function createX402Middleware() {
       return;
     }
 
-    if (!httpContext) {
-      return;
-    }
-
-    const evidence = buildEvidenceFromHttpContext({
-      context: httpContext,
-      requirements: context.requirements,
-      paymentPayload: clonePaymentPayload(context.paymentPayload),
-      settleResult: context.result
-    });
-    setPaymentEvidence(req, evidence);
-    await persistPaymentEvidence(evidence, getPaidRequestRecord(req));
-    (req as EvidenceRequest).paymentEvidencePersisted = true;
+    if
   });
 
-  const httpServer = new x402HTTPResourceServer(resourceServer, routeConfig);
-  const paymentMiddleware = paymentMiddlewareFromHTTPServer(httpServer);
-
-  return async (req: Request, res: Response, next: NextFunction) => {
-    if (isProtectedX402Route(req.path)) {
-      const rawHeader = extractAnyPaymentHeader(req);
-      if (rawHeader === undefined) {
-        const debug = buildPaymentDebugMetadata({
-          failureType: "no_payment_header",
-          route: req.path,
-          providerId: getProviderIdFromRequest(req),
-          expectedPrice: getExpectedPriceForRequest(req)
-        });
-        return res.status(400).json({
-          error: "Payment header is required",
-          type: "no_payment_header",
-          errorCode: "no_payment_header",
-          debug
-        });
-      }
-
-      if (rawHeader.trim() === "") {
-        const debug = buildPaymentDebugMetadata({
-          failureType: "invalid_payment_header",
-          route: req.path,
-          providerId: getProviderIdFromRequest(req),
-          expectedPrice: getExpectedPriceForRequest(req),
-          paymentHeader: rawHeader
-        });
-        return res.status(400).json({
-          error: "Payment header is blank",
-          type: "invalid_payment_header",
-          errorCode: "invalid_payment_header",
-          debug
-        });
-      }
-    }
-
-    // Prevent browsers and proxies from caching sensitive payment evidence.
-    if (req.path.startsWith("/x402/")) {
-      res.set("Cache-Control", "no-store");
-    }
-    const originalJson = res.json.bind(res);
-    res.json = function (body: unknown) {
-      if (
-        res.statusCode === 402 &&
-        body &&
-        typeof body === "object" &&
-        !("debug" in (body as Record<string, unknown>))
-      ) {
-        const pId = Array.isArray(req.query.provider)
-          ? req.query.provider[0]
-          : (req.query.provider ?? "unknown");
-        const paymentHeader =
-          req.header("payment-signature") ?? req.header("x-payment") ?? undefined;
-        const mode = routeModeFromPath(req.path);
-        let expectedPrice = "$0.01";
-        if (mode) {
-          expectedPrice = basePriceByMode[mode as RouteMode];
-          if (typeof pId === "string") {
-            const p = getProviderById(pId);
-            if (p && p.category === mode) {
-              expectedPrice = formatUsdPrice(p.priceUsd);
-            }
-          }
-        }
-        const debug = buildPaymentDebugMetadata({
-          failureType: "payment_required",
-          route: req.path,
-          providerId: typeof pId === "string" ? pId : "unknown",
-          expectedPrice,
-          paymentHeader
-        });
-        return originalJson(redactSensitiveObject({ ...(body as Record<string, unknown>), debug }));
-      }
-      return originalJson(redactSensitiveObject(body));
-    };
-    return paymentMiddleware(req, res, next);
-  };
+  return paymentMiddlewareFromHTTPServer({
+    resourceServer,
+    routes: routeConfig,
+    network,
+    payTo
+  });
 }

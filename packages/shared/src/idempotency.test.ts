@@ -200,4 +200,14 @@ describe("buildPaidRequestFingerprint / hashPaidRequestFingerprint — equivalen
     });
     expect(a).toBe(b);
   });
+
+  it("binds payment reference into the hash so proof+body must match", () => {
+    const base = scrapeInput("https://example.com/reports");
+    const withProof = hashFor({ ...base, paymentReference: "tx_abc" });
+    const withOtherProof = hashFor({ ...base, paymentReference: "tx_def" });
+    const withoutProof = hashFor(base);
+
+    expect(withProof).not.toBe(withOtherProof);
+    expect(withProof).not.toBe(withoutProof);
+  });
 });

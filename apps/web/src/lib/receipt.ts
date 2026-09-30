@@ -1,4 +1,6 @@
 import type { Query402Receipt, QueryMode } from "@query402/shared";
+import { query402ReceiptSchema } from "@query402/shared";
+import { DEFAULT_TIMESTAMP_MAX_AGE_MS, isFreshTimestamp } from "@query402/shared";
 import type { PaidQueryResponse, PublicPaymentEvidence } from "../types.js";
 
 /**
@@ -162,4 +164,58 @@ export function downloadReceipt(
   anchor.click();
   document.body.removeChild(anchor);
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Validate an unknown value as a Query402 receipt. Invalid shapes return null
+ * rather than throwing so UI callers can hide the paid banner cleanly.
+ */
+export function validateReceipt(input: unknown): Query402Receipt | null {
+  const parsed = query402ReceiptSchema.safeParse(input);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
+ * A receipt is current when its `generatedAt` passes the shared freshness
+ * helper. The proof timestamp is the receipt generation time — not the older
+ * result timestamp — so an otherwise-valid export is not hidden solely because
+ * the underlying query finished earlier in the freshness window.
+ */
+export function isReceiptProofFresh(
+  receipt: Query402Receipt,
+  now: Date | number = Date.now(),
+  maxAgeMs = DEFAULT_TIMESTAMP_MAX_AGE_MS
+): boolean {
+  return isFreshTimestamp(receipt.generatedAt, now, maxAgeMs);
+}
+
+export type PaymentEvidenceGate = {
+  show: boolean;
+  reason: "ok" | "invalid_receipt" | "stale_receipt" | "missing_receipt";
+  receipt: Query402Receipt | null;
+};
+
+/**
+ * Gate for the payment evidence banner: the receipt must validate and the
+ * shared freshness check must say the proof is still current.
+ */
+export function evaluatePaymentEvidenceGate(
+  input: unknown,
+  now: Date | number = Date.now(),
+  maxAgeMs = DEFAULT_TIMESTAMP_MAX_AGE_MS
+): PaymentEvidenceGate {
+  if (input === null || input === undefined) {
+    return { show: false, reason: "missing_receipt", receipt: null };
+  }
+
+  const receipt = validateReceipt(input);
+  if (!receipt) {
+    return { show: false, reason: "invalid_receipt", receipt: null };
+  }
+
+  if (!isReceiptProofFresh(receipt, now, maxAgeMs)) {
+    return { show: false, reason: "stale_receipt", receipt };
+  }
+
+  return { show: true, reason: "ok", receipt };
 }

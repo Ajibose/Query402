@@ -29,6 +29,8 @@ const envSchema = z.object({
   X402_FACILITATOR_URL: z.string().url().default("https://channels.openzeppelin.com/x402/testnet"),
   X402_FACILITATOR_API_KEY: z.string().optional(),
   X402_PAY_TO_ADDRESS: z.string().optional(),
+  /** Optional override for the expected payment asset (defaults to network USDC). */
+  X402_ASSET: z.string().min(1).optional(),
   DEMO_CLIENT_SECRET_KEY: z.string().optional(),
   DEMO_CLIENT_PUBLIC_KEY: z.string().optional(),
   DEMO_MODE: z.string().optional()

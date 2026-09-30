@@ -1,32 +1,45 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { DefaultProviderRegistry } from "./registry.js";
 import { ProviderAdapter } from "./core.js";
+import { buildX402Challenge } from "../lib/x402.js";
 
 // Ensure pricing data exists for our fake tests so getProviderById works
-import { providers, computeSlaBadge } from "../lib/pricing.js";
-providers.push({
-  id: "test.search.live",
-  name: "Test Live Search",
-  category: "search",
-  priceUsd: 0.05,
-  description: "Test live search",
-  latencyEstimateMs: 100,
-  qualityScore: 90,
-  sourceType: "live",
-  provenance: "live" as const,
-  enabled: true
-});
-providers.push({
-  id: "test.search.deterministic",
-  name: "Test Deterministic Search",
-  category: "search",
-  priceUsd: 0.05,
-  description: "Test mock search",
-  latencyEstimateMs: 100,
-  qualityScore: 90,
-  sourceType: "deterministic-fallback",
-  provenance: "fallback" as const,
-  enabled: true
+import { providers, getProviderById, computeSlaBadge } from "../lib/pricing.js";
+
+const TEST_PROVIDER_PRICE_USD_CURRENCY = 0.05;
+const TEST_PROVIDER_PRICE_INTEGER = 5;
+
+beforeAll(() => {
+  if (!providers.some((p) => p.id === "test.search.live")) {
+    providers.push({
+      id: "test.search.live",
+      name: "Test Live Search",
+      category: "search",
+      priceUsd: TEST_PROVIDER_PRICE_USD_CURRENCY,
+      priceInteger: TEST_PROVIDER_PRICE_INTEGER,
+      description: "Test live search",
+      latencyEstimateMs: 100,
+      qualityScore: 90,
+      sourceType: "live",
+      provenance: "live" as const,
+      enabled: true
+    });
+  }
+  if (!providers.some((p) => p.id === "test.search.deterministic")) {
+    providers.push({
+      id: "test.search.deterministic",
+      name: "Test Deterministic Search",
+      category: "search",
+      priceUsd: TEST_PROVIDER_PRICE_USD_CURRENCY,
+      priceInteger: TEST_PROVIDER_PRICE_INTEGER,
+      description: "Test mock search",
+      latencyEstimateMs: 100,
+      qualityScore: 90,
+      sourceType: "deterministic-fallback",
+      provenance: "fallback" as const,
+      enabled: true
+    });
+  }
 });
 
 class MockAdapter implements ProviderAdapter {
@@ -175,5 +188,50 @@ describe("ProviderRegistry", () => {
     res = await registry.execute("search", "test.search.live", "test-query");
     expect(res.source).toBe("deterministic-fallback");
     expect(adapter.callCount).toBe(3);
+  });
+
+  it("builds an x402 challenge from the catalog integer price", () => {
+    const provider = getProviderById("test.search.live");
+    expect(provider).toBeTruthy();
+    const challenge = buildX402Challenge({
+      providerId: provider!.id,
+      priceInteger: provider!.priceInteger,
+      currency: "USD"
+    });
+    expect(challenge.amount).toBe(provider!.priceInteger);
+    expect(challenge.amount).toBe(5);
+  });
+
+  it("rejects a one-unit difference and does not run the provider", async () => {
+    const registry = new DefaultProviderRegistry();
+    const adapter = new MockAdapter("test.search.live");
+    registry.register(adapter);
+
+    await expect(
+      registry.execute("search", "test.search.live", "test-query", {
+        challengeAmount: TEST_PROVIDER_PRICE_INTEGER + 1
+      })
+    ).rejects.toThrow(/challenge amount mismatch|challenge amount/);
+    expect(adapter.callCount).toBe(0);
+  });
+
+  it("rejects a zero price and does not build a challenge", () => {
+    expect(() =>
+      buildX402Challenge({
+        providerId: "test.search.live",
+        priceInteger: 0,
+        currency: "USD"
+      })
+    ).toThrow(/price must be greater than zero/);
+  });
+
+  it("rejects a price above the safe integer range", () => {
+    expect(() =>
+      buildX402Challenge({
+        providerId: "test.search.live",
+        priceInteger: Number.MAX_SAFE_INTEGER + 1,
+        currency: "USD"
+      })
+    ).toThrow(/price exceeds safe integer range/);
   });
 });

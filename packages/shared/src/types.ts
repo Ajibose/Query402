@@ -23,6 +23,41 @@ export type ReliabilityBand = "demo" | "fallback" | "live";
 export type PaymentMode = "demo" | "x402" | "sponsored";
 export type PaymentModeBand = "x402" | "demo" | "sponsored" | "not-verified";
 
+export interface SponsorshipBudget {
+  limitUsd: number;
+  spentUsd: number;
+  remainingUsd: number;
+  windowStart: string;
+}
+
+export interface SponsorshipGrantPreview {
+  maxAmountUsd: number;
+  ttlSeconds: number;
+  expiresInSeconds: number;
+  restrictions: {
+    mode: QueryMode | null;
+    providerId: string | null;
+  };
+}
+
+export interface SponsorshipPreview {
+  sponsorshipEnabled: boolean;
+  storageAvailable: boolean;
+  available: boolean;
+  decision: string;
+  network: string;
+  wallet: string;
+  mode: QueryMode;
+  provider: string;
+  providerName: string;
+  grant: SponsorshipGrantPreview;
+  quotedPriceUsd: number;
+  priceFitsGrant: boolean;
+  perWalletBudget: SponsorshipBudget;
+  globalBudget: SponsorshipBudget;
+  reason?: string;
+}
+
 export interface SlaBadges {
   latencyBand: LatencyBand;
   latencyLabel: string;

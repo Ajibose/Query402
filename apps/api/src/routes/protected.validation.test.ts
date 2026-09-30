@@ -19,8 +19,13 @@ vi.mock("../lib/persistence.js", () => ({
 }));
 
 vi.mock("../lib/idempotency/service.js", () => ({
-  getResponseByPaymentProof: vi.fn().mockReturnValue(null),
-  savePaymentProofResponse: vi.fn()
+  getResponseByPaymentProof: vi.fn().mockReturnValue({ hit: false }),
+  savePaymentProofResponse: vi.fn(),
+  isIdempotencyStorageAvailable: vi.fn().mockReturnValue(true),
+  acquireIdempotencyLock: vi.fn().mockReturnValue({ state: "acquired" }),
+  getCachedIdempotencyResponse: vi.fn().mockReturnValue({ hit: false }),
+  cacheIdempotencyResponse: vi.fn(),
+  releaseIdempotencyLock: vi.fn()
 }));
 
 function mockQueryResult(mode: string, providerId: string, priceUsd: number) {

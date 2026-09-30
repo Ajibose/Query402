@@ -1,6 +1,19 @@
 import { ProviderResultItem } from "@query402/shared";
 import { ProviderAdapter } from "./core.js";
 import { fetchGroqItems } from "../lib/groq.js";
+import { assertSafeUrl } from "../lib/urlSafety.js";
+import { assertSafeScrapeUrl } from "../lib/scrape-url-safety.js";
+
+const UNSAFE_SCRAPE_TARGET = "Unsafe scrape target";
+
+function assertSafeTarget(targetUrl: string): void {
+  try {
+    assertSafeUrl(targetUrl);
+    assertSafeScrapeUrl(targetUrl);
+  } catch {
+    throw new Error(UNSAFE_SCRAPE_TARGET);
+  }
+}
 
 function buildScrapeItems(targetUrl: string): ProviderResultItem[] {
   const hostname = (() => {
@@ -41,6 +54,8 @@ export class ScrapeAdapter implements ProviderAdapter {
   }
 
   async execute(targetUrl: string): Promise<ProviderResultItem[]> {
+    assertSafeTarget(targetUrl);
+
     const groqItems = await fetchGroqItems("scrape", targetUrl);
     if (!groqItems || groqItems.length === 0) {
       throw new Error("No items returned from scrape provider");
@@ -49,6 +64,7 @@ export class ScrapeAdapter implements ProviderAdapter {
   }
 
   getFallback(targetUrl: string): ProviderResultItem[] {
+    assertSafeTarget(targetUrl);
     return buildScrapeItems(targetUrl);
   }
 }

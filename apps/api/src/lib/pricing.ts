@@ -20,6 +20,104 @@ export class ProviderCatalogConflictError extends Error {
   }
 }
 
+export class PriceMismatchError extends Error {
+  readonly code = "price_mismatch" as const;
+  constructor(readonly challengeUnits: number, readonly catalogUnits: number) {
+    super(`x402 challenge amount (${challengeUnits}) does not match catalog price (${catalogUnits})`);
+    this.name = "PriceMismatchError";
+  }
+}
+
+export class ZeroPriceError extends Error {
+  readonly code = "zero_price" as const;
+  constructor(readonly providerId: string) {
+    super(`Provider "${providerId}" has a zero price; refusing to build an x402 challenge`);
+    this.name = "ZeroPriceError";
+  }
+}
+
+export class UnsafePriceError extends Error {
+  readonly code = "unsafe_price" as const;
+  constructor(readonly value: number) {
+    super(`Price ${value} is outside the safe integer range`);
+    this.name = "UnsafePriceError";
+  }
+}
+
+export const USD_UNITS_PER_DOLLAR = 1_000_000;
+
+export function assertSafePriceUnits(units: number): number {
+  if (!Number.isSafeInteger(units)) {
+    throw new UnsafePriceError(units);
+  }
+  return units;
+}
+
+export function usdStringToUnits(price: string): number {
+  const trimmed = price.trim();
+  const match = /^\$?(\d+)(?:\.(\d+))?$/.exec(trimmed);
+  if (!match) {
+    throw new UnsafePriceError(Number.NaN);
+  }
+  const whole = match[1];
+  const frac = match[2] ?? "";
+  const fracPadded = (frac + "000000").slice(0, 6);
+  const units = Number(whole) * USD_UNITS_PER_DOLLAR + Number(fracPadded);
+  if (!Number.isSafeInteger(units)) {
+    throw new UnsafePriceError(units);
+  }
+  return units;
+}
+
+export function unitsToUsdString(units: number): string {
+  if (!Number.isSafeInteger(units)) {
+    throw new UnsafePriceError(units);
+  }
+  const whole = Math.trunc(units / USD_UNITS_PER_DOLLAR);
+  const frac = units % USD_UNITS_PER_DOLLAR;
+  if (frac === 0) {
+    return `$${whole}`;
+  }
+  const fracStr = String(frac).padStart(6, "0").replace(/0+$/, "");
+  return `$${whole}.${fracStr}`;
+}
+
+export function priceUsdToUnits(priceUsd: number): number {
+  if (!Number.isFinite(priceUsd)) {
+    throw new UnsafePriceError(priceUsd);
+  }
+  const units = Math.round(priceUsd * USD_UNITS_PER_DOLLAR);
+  if (!Number.isSafeInteger(units)) {
+    throw new UnsafePriceError(units);
+  }
+  return units;
+}
+
+export function getProviderPriceUnits(providerId: string): number {
+  const provider = getProviderById(providerId);
+  if (!provider) {
+    throw new Error(`Provider not found or disabled: ${providerId}`);
+  }
+  return priceUsdToUnits(provider.priceUsd);
+}
+
+export function assertPriceMatch(challengeUnits: number, catalogUnits: number): void {
+  if (challengeUnits !== catalogUnits) {
+    throw new PriceMismatchError(challengeUnits, catalogUnits);
+  }
+}
+
+export function buildChallengeAmountUnits(providerId: string): number {
+  const catalogUnits = getProviderPriceUnits(providerId);
+  if (catalogUnits === 0) {
+    throw new ZeroPriceError(providerId);
+  }
+  assertSafePriceUnits(catalogUnits);
+  const challengeUnits = catalogUnits;
+  assertPriceMatch(challengeUnits, catalogUnits);
+  return challengeUnits;
+}
+
 const envKeyMapping: Record<string, string[]> = {
   "search.live": ["GROQ_API_KEY"],
   "search.basic": ["GROQ_API_KEY"],

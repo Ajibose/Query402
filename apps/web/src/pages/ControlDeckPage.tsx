@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ProviderDefinition, QueryMode, SponsorshipPreview } from "@query402/shared";
 import {
   Activity,
@@ -25,6 +25,7 @@ import { Link } from "react-router-dom";
 import type { AnalyticsResponse, EvidenceCheckItem, PaidQueryResponse } from "../types.js";
 import { API_BASE_URL, fetchHealth, fetchJson, money } from "../lib/api.js";
 import {
+  BudgetGate,
   fetchSponsorshipEnabled,
   fetchSponsorshipPreview,
   runSponsoredPaidQuery
@@ -148,6 +149,8 @@ export default function ControlDeckPage() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [demoMode, setDemoMode] = useState(false);
+  const budgetGateRef = useRef(new BudgetGate());
+  const [budgetGateDecision, setBudgetGateDecision] = useState(() => budgetGateRef.current.decision);
 
   const modeProviders = useMemo(
     () => providers.filter((provider) => provider.category === mode && provider.enabled),
@@ -372,16 +375,20 @@ export default function ControlDeckPage() {
 
   // Preview the sponsorship grant status whenever the sponsored path is active
   // and the relevant inputs change. Aborts in-flight requests so rapid toggling
-  // of mode/provider does not surface stale state.
+  // of mode/provider does not surface stale state. The BudgetGate additionally
+  // guards against a late response for an older budget re-enabling the actions.
   useEffect(() => {
     if (paymentMode !== "sponsored" || !walletConnected || !sponsorshipEnabled) {
       setPreview(null);
       setPreviewError(null);
       setIsPreviewLoading(false);
+      budgetGateRef.current.reset();
+      setBudgetGateDecision(budgetGateRef.current.decision);
       return;
     }
 
     const controller = new AbortController();
+    const requestId = budgetGateRef.current.beginRequest();
     setIsPreviewLoading(true);
     setPreviewError(null);
 
@@ -395,6 +402,8 @@ export default function ControlDeckPage() {
       .then((result) => {
         if (!controller.signal.aborted) {
           setPreview(result);
+          budgetGateRef.current.applyResponse(requestId, result);
+          setBudgetGateDecision(budgetGateRef.current.decision);
         }
       })
       .catch((err: unknown) => {
@@ -402,10 +411,12 @@ export default function ControlDeckPage() {
           return;
         }
         setPreview(null);
-        if (err instanceof Error && err.name === "AbortError") {
-          return;
-        }
-        setPreviewError(err instanceof Error ? err.message : "Grant preview unavailable");
+        const reason = err instanceof Error && err.name !== "AbortError"
+          ? err.message
+          : "Grant preview unavailable";
+        setPreviewError(reason);
+        budgetGateRef.current.applyError(requestId, reason);
+        setBudgetGateDecision(budgetGateRef.current.decision);
       })
       .finally(() => {
         if (!controller.signal.aborted) {
@@ -598,7 +609,7 @@ export default function ControlDeckPage() {
                   paymentMode === "sponsored" ? "payment-mode-btn active" : "payment-mode-btn"
                 }
                 onClick={() => setPaymentMode("sponsored")}
-                disabled={!walletConnected || !sponsorshipEnabled}
+                disabled={!walletConnected || !sponsorshipEnabled || !budgetGateDecision.allowed}
               >
                 Sponsored tx
               </button>
@@ -754,13 +765,19 @@ export default function ControlDeckPage() {
                 isLoading ||
                 walletState.status === "signing" ||
                 !selectedProviderDetails ||
-                !walletConnected
+                !walletConnected ||
+                (paymentMode === "sponsored" && !budgetGateDecision.allowed)
               }
               type="button"
             >
               {isLoading || walletState.status === "signing" ? "Executing..." : "Run paid query"}
               <TerminalSquare size={16} />
             </button>
+            {paymentMode === "sponsored" && !budgetGateDecision.allowed && budgetGateDecision.reason ? (
+              <p className="error-box" data-testid="budget-gate-reason">
+                {budgetGateDecision.reason}
+              </p>
+            ) : null}
           </div>
 
           {paymentMode === "sponsored" && walletConnected && sponsorshipEnabled ? (
@@ -792,7 +809,7 @@ export default function ControlDeckPage() {
               <p className="empty-note">Waiting for results. Start a query from the left panel.</p>
             ) : (
               <>
-                <PaymentEvidenceBanner payment={result.payment} />
+                <PaymentEvidenceBanner payment={result.payment} receipt={receipt} />
 
                 <div className="result-meta">
                   <span>{result.result.providerName}</span>
