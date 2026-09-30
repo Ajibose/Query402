@@ -3,6 +3,7 @@ import {
   latencyBandSchema,
   MICRO_USD_PER_USD,
   newsQuerySchema,
+  paymentChallengeSchema,
   paymentLinkAmountSchema,
   paymentLinkAssetSchema,
   paymentLinkDestinationSchema,
@@ -13,10 +14,12 @@ import {
   providerSchema,
   query402ReceiptSchema,
   queryModeSchema,
+  quoteBindErrorCodeSchema,
   receiptEvidenceKindSchema,
   receiptPaymentModeSchema,
   receiptPaymentStatusSchema,
   reliabilityBandSchema,
+  requestedQuoteSchema,
   scrapeQuerySchema,
   searchQuerySchema,
   signedGrantSchema,
@@ -409,5 +412,39 @@ describe("query402ReceiptSchema", () => {
   it("rejects receipts missing the schema literal", () => {
     const { schema: _ignored, ...withoutSchema } = baseReceipt;
     expect(query402ReceiptSchema.safeParse(withoutSchema).success).toBe(false);
+  });
+});
+
+describe("requestedQuoteSchema / paymentChallengeSchema", () => {
+  const quote = {
+    provider: "search.basic",
+    amount: "100000",
+    asset: "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA",
+    network: "stellar:testnet"
+  };
+
+  it("accepts a requested quote", () => {
+    expect(requestedQuoteSchema.parse(quote)).toEqual(quote);
+  });
+
+  it("accepts a challenge with optional expiry", () => {
+    expect(
+      paymentChallengeSchema.parse({
+        ...quote,
+        expiresAt: "2099-01-01T00:00:00.000Z"
+      })
+    ).toMatchObject({ expiresAt: "2099-01-01T00:00:00.000Z" });
+  });
+
+  it("rejects incomplete quotes", () => {
+    expect(requestedQuoteSchema.safeParse({ ...quote, amount: "" }).success).toBe(false);
+  });
+});
+
+describe("quoteBindErrorCodeSchema", () => {
+  it("accepts the supported bind error codes", () => {
+    expect(quoteBindErrorCodeSchema.parse("challenge_mismatch")).toBe("challenge_mismatch");
+    expect(quoteBindErrorCodeSchema.parse("challenge_expired")).toBe("challenge_expired");
+    expect(quoteBindErrorCodeSchema.parse("challenge_empty")).toBe("challenge_empty");
   });
 });

@@ -226,3 +226,35 @@ export const paidRouteErrorCodeSchema = z.enum([
   "rate_limited",
   "unauthorized"
 ]);
+
+// --- Agent client quote-binding schemas ------------------------------------
+//
+// The agent client remembers the quote it requested (provider + amount + asset
+// + network) and refuses to sign a 402 challenge that does not match. These
+// schemas are the shared contract for that bind; they intentionally omit the
+// raw PAYMENT-REQUIRED header so typed errors never leak challenge bytes.
+
+export const requestedQuoteSchema = z.object({
+  provider: z.string().min(1),
+  amount: z.string().min(1),
+  asset: z.string().min(1),
+  network: z.string().min(1)
+});
+
+export const paymentChallengeSchema = z.object({
+  provider: z.string().min(1),
+  amount: z.string().min(1),
+  asset: z.string().min(1),
+  network: z.string().min(1),
+  expiresAt: z.string().datetime({ offset: true }).optional()
+});
+
+export const quoteBindErrorCodeSchema = z.enum([
+  "challenge_mismatch",
+  "challenge_expired",
+  "challenge_empty"
+]);
+
+export type RequestedQuote = z.infer<typeof requestedQuoteSchema>;
+export type PaymentChallenge = z.infer<typeof paymentChallengeSchema>;
+export type QuoteBindErrorCode = z.infer<typeof quoteBindErrorCodeSchema>;
